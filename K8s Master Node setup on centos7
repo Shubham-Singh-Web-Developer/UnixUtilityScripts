@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Update kernel modules
+echo "overlay" | sudo tee -a /etc/modules-load.d/k8s.conf
+echo "br_netfilter" | sudo tee -a /etc/modules-load.d/k8s.conf
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Disable Firewalld
+sudo systemctl stop firewalld
+sudo systemctl disable firewalld
+sudo systemctl mask --now firewalld
+
+# Disable SELinux
+sudo sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+
+# Install yum-utils
+sudo yum install -y yum-utils
+
+# Add Kubernetes repository
+cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v1.29/rpm/repodata/repomd.xml.key
+EOF
+
+# Add Docker repository
+sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+# Install Docker
+sudo yum install docker-ce docker-ce-cli containerd.io -y
+
+# Enable and start Docker
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Create the /etc/containerd directory
+sudo mkdir -p /etc/containerd
+
+# Configure Containerd
+containerd config default | sudo tee /etc/containerd/config.toml
+
+# Set SystemdCgroup to false
+sudo sed -i 's/SystemdCgroup = true/SystemdCgroup = false/' /etc/containerd/config.toml
+
+# Update sysctl settings
+echo "net.bridge.bridge-nf-call-iptables = 1" | sudo tee -a /etc/sysctl.d/99-kubernetes-cri.conf
+echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.d/99-kubernetes-cri.conf
+echo "net.bridge.bridge-nf-call-ip6tables = 1" | sudo tee -a /etc/sysctl.d/99-kubernetes-cri.conf
+
+# Apply sysctl params without reboot
+sudo sysctl --system
+
+# Verify loaded modules
+lsmod | grep br_netfilter
+lsmod | grep overlay
+
+# Verify sysctl settings
+sysctl net.bridge.bridge-nf-call-iptables
+sysctl net.bridge.bridge-nf-call-ip6tables
+sysctl net.ipv4.ip_forward
+
+
+# Install Kubernetes components
+sudo yum install -y kubeadm kubectl kubelet
+
+# Start and enable kubelet
+sudo systemctl start kubelet
+sudo systemctl enable kubelet
+
+# Apply Weave network plugin
+kubectl apply -f https://github.com/weaveworks/weave/releases/download/v2.8.1/weave-daemonset-k8s.yaml
+
+# Initialize the cluster
+kubeadm init
+
+# Set KUBECONFIG environment variable
+export KUBECONFIG=/etc/kubernetes/admin.conf
+
+echo "Kernel modules updated, Firewalld and SELinux disabled, Kubernetes repository added, Containerd installed, configuration updated, SystemdCgroup set to false."
+echo "Weave network plugin applied, cluster initialized, and KUBECONFIG environment variable set."
+echo "Remember to check and adjust any other settings as needed."
+echo "reboot to make sure everything works"
